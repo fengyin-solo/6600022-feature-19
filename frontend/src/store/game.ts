@@ -189,6 +189,47 @@ function getAIMove(board: BoardState, aiPlayer: number, depth: number): [number,
   return bestMove;
 }
 
+function getLinePattern(board: BoardState, row: number, col: number, dr: number, dc: number, player: number): { count: number; openEnds: number } {
+  let count = 1;
+  let fwdBlocked = false;
+  let bwdBlocked = false;
+
+  let r = row + dr;
+  let c = col + dc;
+  while (r >= 0 && r < BOARD_SIZE && c >= 0 && c < BOARD_SIZE && board[r][c] === player) {
+    count++;
+    r += dr;
+    c += dc;
+  }
+  if (r < 0 || r >= BOARD_SIZE || c < 0 || c >= BOARD_SIZE || board[r][c] !== EMPTY) {
+    fwdBlocked = true;
+  }
+
+  r = row - dr;
+  c = col - dc;
+  while (r >= 0 && r < BOARD_SIZE && c >= 0 && c < BOARD_SIZE && board[r][c] === player) {
+    count++;
+    r -= dr;
+    c -= dc;
+  }
+  if (r < 0 || r >= BOARD_SIZE || c < 0 || c >= BOARD_SIZE || board[r][c] !== EMPTY) {
+    bwdBlocked = true;
+  }
+
+  const openEnds = (fwdBlocked ? 0 : 1) + (bwdBlocked ? 0 : 1);
+  return { count, openEnds };
+}
+
+function isKeyMove(board: BoardState, row: number, col: number, player: number): boolean {
+  for (const [dr, dc] of DIRECTIONS) {
+    const { count, openEnds } = getLinePattern(board, row, col, dr, dc, player);
+    if (count >= 5) return true;
+    if (count === 4 && openEnds >= 1) return true;
+    if (count === 3 && openEnds === 2) return true;
+  }
+  return false;
+}
+
 // --- Store ---
 
 export const useGameStore = defineStore('game', () => {
@@ -207,6 +248,8 @@ export const useGameStore = defineStore('game', () => {
   const replayBoard = ref<BoardState>(createEmptyBoard());
   const isReplayPlaying = ref(false);
   const replaySpeed = ref(1000);
+  const pauseOnKeyMove = ref(false);
+  const isCurrentKeyMove = ref(false);
 
   const currentMoveCount = computed(() => moves.value.length);
   const isGameOver = computed(() => status.value === 'finished');
@@ -273,81 +316,127 @@ export const useGameStore = defineStore('game', () => {
   }
 
   function startReplay(record: GameRecord) {
+    stopReplayTimer();
     replayMoves.value = [...record.moves];
     replayIndex.value = 0;
     replayBoard.value = createEmptyBoard();
     status.value = 'replaying';
     isReplayPlaying.value = false;
+    isCurrentKeyMove.value = false;
   }
 
-  function replayStepForward() {
-    if (replayIndex.value >= replayMoves.value.length) return;
+  function checkKeyMoveAt(index: number): boolean {
+    if (index <= 0 || index > replayMoves.value.length) return false;
+    const move = replayMoves.value[index - 1];
+    return isKeyMove(replayBoard.value, move.row, move.col, move.player);
+  }
+
+  function replayStepForward(autoPlay = false) {
+    if (replayIndex.value >= replayMoves.value.length) return false;
+    if (!autoPlay && isReplayPlaying.value) {
+      isReplayPlaying.value = false;
+      stopReplayTimer();
+    }
     const move = replayMoves.value[replayIndex.value];
     replayBoard.value[move.row][move.col] = move.player;
     replayIndex.value++;
+    isCurrentKeyMove.value = isKeyMove(replayBoard.value, move.row, move.col, move.player);
+    return true;
   }
 
   function replayStepBack() {
-    if (replayIndex.value <= 0) return;
+    if (replayIndex.value <= 0) return false;
+    if (isReplayPlaying.value) {
+      isReplayPlaying.value = false;
+      stopReplayTimer();
+    }
     replayIndex.value--;
     const move = replayMoves.value[replayIndex.value];
     replayBoard.value[move.row][move.col] = EMPTY;
+    isCurrentKeyMove.value = false;
+    return true;
   }
 
   function replayGoToStart() {
+    stopReplayTimer();
     replayBoard.value = createEmptyBoard();
     replayIndex.value = 0;
+    isCurrentKeyMove.value = false;
+    isReplayPlaying.value = false;
   }
 
   function replayGoToEnd() {
+    stopReplayTimer();
+    isReplayPlaying.value = false;
     replayBoard.value = createEmptyBoard();
     for (let i = 0; i < replayMoves.value.length; i++) {
       const m = replayMoves.value[i];
       replayBoard.value[m.row][m.col] = m.player;
     }
     replayIndex.value = replayMoves.value.length;
+    if (replayMoves.value.length > 0) {
+      const lastMove = replayMoves.value[replayMoves.value.length - 1];
+      isCurrentKeyMove.value = isKeyMove(replayBoard.value, lastMove.row, lastMove.col, lastMove.player);
+    } else {
+      isCurrentKeyMove.value = false;
+    }
   }
 
-  let replayTimer: ReturnType<typeof setInterval> | null = null;
+  let replayTimer: ReturnType<typeof setTimeout> | null = null;
+
+  function stopReplayTimer() {
+    if (replayTimer) {
+      clearTimeout(replayTimer);
+      replayTimer = null;
+    }
+  }
+
+  function scheduleNextStep() {
+    stopReplayTimer();
+    if (!isReplayPlaying.value) return;
+    if (replayIndex.value >= replayMoves.value.length) {
+      isReplayPlaying.value = false;
+      return;
+    }
+    replayTimer = setTimeout(() => {
+      const advanced = replayStepForward(true);
+      if (!advanced) {
+        isReplayPlaying.value = false;
+        return;
+      }
+      if (pauseOnKeyMove.value && isCurrentKeyMove.value) {
+        isReplayPlaying.value = false;
+        return;
+      }
+      scheduleNextStep();
+    }, replaySpeed.value);
+  }
 
   function toggleReplayPlay() {
-    isReplayPlaying.value = !isReplayPlaying.value;
     if (isReplayPlaying.value) {
-      replayTimer = setInterval(() => {
-        if (replayIndex.value >= replayMoves.value.length) {
-          isReplayPlaying.value = false;
-          if (replayTimer) clearInterval(replayTimer);
-          replayTimer = null;
-          return;
-        }
-        replayStepForward();
-      }, replaySpeed.value);
+      isReplayPlaying.value = false;
+      stopReplayTimer();
     } else {
-      if (replayTimer) clearInterval(replayTimer);
-      replayTimer = null;
+      if (replayIndex.value >= replayMoves.value.length) return;
+      isReplayPlaying.value = true;
+      scheduleNextStep();
     }
   }
 
   function setReplaySpeed(ms: number) {
     replaySpeed.value = ms;
     if (isReplayPlaying.value) {
-      if (replayTimer) clearInterval(replayTimer);
-      replayTimer = setInterval(() => {
-        if (replayIndex.value >= replayMoves.value.length) {
-          isReplayPlaying.value = false;
-          if (replayTimer) clearInterval(replayTimer);
-          replayTimer = null;
-          return;
-        }
-        replayStepForward();
-      }, replaySpeed.value);
+      scheduleNextStep();
     }
+  }
+
+  function togglePauseOnKeyMove() {
+    pauseOnKeyMove.value = !pauseOnKeyMove.value;
   }
 
   function stopReplay() {
     isReplayPlaying.value = false;
-    if (replayTimer) clearInterval(replayTimer);
-    replayTimer = null;
+    stopReplayTimer();
     status.value = 'idle';
   }
 
@@ -357,10 +446,10 @@ export const useGameStore = defineStore('game', () => {
 
   return {
     board, currentPlayer, moves, status, winner, gameRecords, aiConfig, isAiThinking,
-    replayMoves, replayIndex, replayBoard, isReplayPlaying, replaySpeed,
+    replayMoves, replayIndex, replayBoard, isReplayPlaying, replaySpeed, pauseOnKeyMove, isCurrentKeyMove,
     currentMoveCount, isGameOver,
     startGame, placeStone, aiMove, saveRecord,
     startReplay, replayStepForward, replayStepBack, replayGoToStart, replayGoToEnd,
-    toggleReplayPlay, setReplaySpeed, stopReplay, checkWin,
+    toggleReplayPlay, setReplaySpeed, togglePauseOnKeyMove, stopReplay, checkWin,
   };
 });

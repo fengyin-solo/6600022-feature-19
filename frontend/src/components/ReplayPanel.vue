@@ -28,6 +28,7 @@
     <div v-else>
       <div class="text-center mb-3">
         <span class="text-gray-400 text-sm">第 {{ store.replayIndex }} / {{ store.replayMoves.length }} 手</span>
+        <span v-if="store.isCurrentKeyMove" class="ml-2 text-xs px-2 py-0.5 rounded-full bg-yellow-600 text-white">关键手</span>
       </div>
 
       <div class="w-full bg-gray-800 rounded-full h-2 mb-4">
@@ -66,6 +67,18 @@
           :class="store.replaySpeed === speed.value ? 'bg-green-600 text-white' : 'bg-gray-800 text-gray-400 hover:bg-gray-700'"
         >
           {{ speed.label }}
+        </button>
+      </div>
+
+      <div class="flex items-center justify-center gap-2 mb-4">
+        <button
+          @click="store.togglePauseOnKeyMove()"
+          class="px-3 py-1.5 text-xs rounded-lg transition-colors flex items-center gap-1.5"
+          :class="store.pauseOnKeyMove ? 'bg-yellow-600 text-white' : 'bg-gray-800 text-gray-400 hover:bg-gray-700'"
+        >
+          <svg v-if="store.pauseOnKeyMove" class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
+          <svg v-else class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
+          停在关键手
         </button>
       </div>
 
